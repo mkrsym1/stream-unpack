@@ -1,0 +1,9 @@
+/target
+
+# Example input and output
+/archive.zip
+/multipart
+/unpack
+
+# File manager metadata
+/**/.directory

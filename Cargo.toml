@@ -1,0 +1,25 @@
+[package]
+name = "stream-unpack"
+version = "0.1.0"
+authors = ["mkrsym1 <mkrsym1@gmail.com>"]
+repository = "https://github.com/mkrsym1/stream-unpack"
+license = "GPL-3.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1"
+anyhow = "1"
+
+byteorder = "1.5"
+
+inflate = { version = "0.4", optional = true }
+
+[features]
+default = [ "zip", "deflate" ]
+
+# ZIP
+zip = []
+zip-comments = [ "zip" ]
+
+# Decompressors
+deflate = [ "dep:inflate" ]
