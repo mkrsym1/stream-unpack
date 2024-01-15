@@ -63,10 +63,6 @@ impl CompressionMethod {
 
     /// Returns whether decompression is supported for this method
     pub fn is_supported(&self) -> bool {
-        let Self::Unknown(..) = self else { 
-            return false; 
-        };
-
-        true
+        matches!(self, Self::Unknown(..))
     }
 }
