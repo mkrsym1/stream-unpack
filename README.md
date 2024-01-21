@@ -12,8 +12,9 @@ let central_directory = read_cd::from_provider(
     |pos, length| Ok(archive[(pos.offset)..(pos.offset + length)].to_owned())
 ).unwrap();
 
-let mut unpacker = ZipUnpacker::new(central_directory.sort(), vec![archive.len()], |data| {
-    println!("Got data: {data}");
+let mut unpacker = ZipUnpacker::new(central_directory.sort(), vec![archive.len()]);
+unpacker.set_callback(|data| {
+    println!("Got data: {data:?}");
     // Do something useful with data. See full examples
 
     Ok(())
