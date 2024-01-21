@@ -87,7 +87,8 @@ pub struct ZipUnpacker<'a> {
     disk_sizes: Vec<usize>,
     central_directory: SortedCentralDirectory,
 
-    on_decode: Box<dyn Fn(ZipDecodedData) -> anyhow::Result<()> + 'a>
+    #[allow(clippy::type_complexity)]
+    on_decode: Option<Box<dyn Fn(ZipDecodedData) -> anyhow::Result<()> + 'a>>
 }
 
 impl std::fmt::Debug for ZipUnpacker<'_> {
@@ -101,12 +102,10 @@ impl std::fmt::Debug for ZipUnpacker<'_> {
 impl<'a> ZipUnpacker<'a> {
     /// Creates a new ZipUnpacker
     /// 
-    /// Callback on_decode will fire when the unpacker decodes new data
-    /// 
     /// The easiest way to obtain a central directory object is to use [read_cd::from_provider].
     /// "disk_sizes" must only contain one element if the archive is a cut one, and not a
     /// real split one.
-    pub fn new(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>, on_decode: impl Fn(ZipDecodedData) -> anyhow::Result<()> + 'a) -> Self {
+    pub fn new(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>) -> Self {
         Self {
             decoder_state: ZipDecoderState::FileHeader,
             current_index: 0,
@@ -115,7 +114,7 @@ impl<'a> ZipUnpacker<'a> {
             disk_sizes,
             central_directory,
 
-            on_decode: Box::new(on_decode)
+            on_decode: None
         }
     }
 
@@ -123,12 +122,10 @@ impl<'a> ZipUnpacker<'a> {
     /// is not actually split, you must set disk number to 0 and use the absolute offset,
     /// even if there are multiple files
     /// 
-    /// Callback on_decode will fire when the unpacker decodes new data
-    /// 
     /// The easiest way to obtain a central directory object is to use [read_cd::from_provider].
     /// "disk_sizes" must only contain one element if the archive is a cut one, and not a
     /// real split one.
-    pub fn resume(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>, position: ZipPosition, on_decode: impl Fn(ZipDecodedData) -> anyhow::Result<()> + 'a) -> Result<Self, DecoderError> {
+    pub fn resume(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>, position: ZipPosition) -> Result<Self, DecoderError> {
         let index = central_directory.headers_ref()
             .binary_search_by(|h| h.header_position().cmp(&position))
             .map_err(|_| DecoderError::InvalidOffset(position))?;
@@ -141,8 +138,14 @@ impl<'a> ZipUnpacker<'a> {
             disk_sizes,
             central_directory,
 
-            on_decode: Box::new(on_decode)
+            on_decode: None
         })
+    }
+
+    /// Sets the decode callback. The passed closure will be invoked
+    /// when new data is decoded from bytes passed to [ZipUnpacker::update]
+    pub fn set_callback(&mut self, on_decode: impl Fn(ZipDecodedData) -> anyhow::Result<()> + 'a) {
+        self.on_decode = Some(Box::new(on_decode));
     }
 
     /// Update this ZipUnpacker with new bytes. The callback may or
@@ -226,7 +229,9 @@ impl<'a> ZipUnpacker<'a> {
                 };
                 let header_size = lfh.header_size;
 
-                (self.on_decode)(ZipDecodedData::FileHeader(cdfh, &lfh))?;
+                if let Some(on_decode) = &self.on_decode {
+                    (on_decode)(ZipDecodedData::FileHeader(cdfh, &lfh))?;
+                }
 
                 if lfh.uncompressed_size != 0 {
                     let decompressor = lfh.compression_method
@@ -255,7 +260,9 @@ impl<'a> ZipUnpacker<'a> {
                 };
                 *pos += count as u64;
 
-                (self.on_decode)(ZipDecodedData::FileData(decompressed))?;
+                if let Some(on_decode) = &self.on_decode {
+                    (on_decode)(ZipDecodedData::FileData(decompressed))?;
+                }
 
                 if count as u64 == bytes_left {
                     self.decoder_state = ZipDecoderState::FileHeader;
