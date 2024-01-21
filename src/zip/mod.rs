@@ -95,6 +95,9 @@ impl std::fmt::Debug for ZipUnpacker<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ZipUnpacker")
             .field("decoder_state", &self.decoder_state)
+            .field("current_index", &self.current_index)
+            .field("current_position", &self.current_position)
+            .field("disk_sizes", &self.disk_sizes)
             .finish()
     }
 }
