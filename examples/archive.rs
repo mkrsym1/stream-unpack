@@ -18,7 +18,8 @@ fn main() {
 
     let current_file: RefCell<Option<File>> = RefCell::new(None);
 
-    let mut unpacker = ZipUnpacker::new(central_directory, vec![archive.len()], |data| {
+    let mut unpacker = ZipUnpacker::new(central_directory, vec![archive.len()]);
+    unpacker.set_callback(|data| {
         match data {
             ZipDecodedData::FileHeader(cdfh, _) => {
                 println!();
