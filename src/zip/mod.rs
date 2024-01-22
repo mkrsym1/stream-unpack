@@ -168,7 +168,7 @@ impl<'a> ZipUnpacker<'a> {
             buf_offset += advanced;
 
             self.current_position.offset += advanced;
-            if self.current_position.offset > self.disk_sizes[self.current_position.disk] {
+            if self.current_position.offset >= self.disk_sizes[self.current_position.disk] {
                 // Find which disk this offset will be at
                 let mut new_offset = self.current_position.offset;
                 let mut new_disk_number = None;
