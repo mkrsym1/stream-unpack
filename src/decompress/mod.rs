@@ -10,7 +10,7 @@ pub enum DecompressionError {
     Generic(String)
 }
 
-pub trait Decompressor: std::fmt::Debug {
+pub trait Decompressor: std::fmt::Debug + Send + Sync {
     /// Tries to decompress data
     /// 
     /// The return values are the amount of input bytes decompressed,
