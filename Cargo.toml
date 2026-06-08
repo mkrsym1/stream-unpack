@@ -24,3 +24,6 @@ zip-comments = [ "zip" ]
 
 # Decompressors
 deflate = [ "dep:inflate" ]
+
+# Decryptors
+zipcrypto = []
