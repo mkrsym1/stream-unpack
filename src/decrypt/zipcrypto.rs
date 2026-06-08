@@ -1,4 +1,4 @@
-use crate::decrypt::{DecryptionError, Decryptor};
+use crate::decrypt::{DecryptionError, Decryptor, DecryptorCreationError};
 
 // taken from https://github.com/srijs/rust-crc32fast/blob/dbf4f76cd71cdcc57d9164cbd46890d53ce0423c/src/table.rs
 static CRC32_TABLE: [u32; 256] = [
@@ -43,7 +43,7 @@ static CRC32_TABLE: [u32; 256] = [
 
 // https://github.com/srijs/rust-crc32fast/blob/dbf4f76cd71cdcc57d9164cbd46890d53ce0423c/src/baseline.rs#L61
 fn crc32(prev: u32, byte: u8) -> u32 {
-    !(CRC32_TABLE[((!prev as u8) ^ byte) as usize] ^ (!prev >> 8))
+    CRC32_TABLE[((prev as u8) ^ byte) as usize] ^ (prev >> 8)
 }
 
 #[derive(Debug)]
@@ -53,7 +53,7 @@ struct ZipCryptoState {
 
 impl ZipCryptoState {
     fn from_password(password: &[u8]) -> Self {
-        let mut state = Self { keys: [ 305419896, 591751049, 878082192 ] };
+        let mut state = Self { keys: [ 0x12345678, 0x23456789, 0x34567890 ] };
         for byte in password {
             state.update_keys(*byte);
         }
@@ -62,15 +62,15 @@ impl ZipCryptoState {
 
     fn update_keys(&mut self, byte: u8) {
         self.keys[0] = crc32(self.keys[0], byte);
-        self.keys[1] += self.keys[0] & 0xFF;
-        self.keys[1] = (self.keys[1] * 134775813) + 1;
+        self.keys[1] = self.keys[1].wrapping_add(self.keys[0] & 0xFF);
+        self.keys[1] = self.keys[1].wrapping_mul(134775813).wrapping_add(1);
         self.keys[2] = crc32(self.keys[2], (self.keys[1] >> 24) as u8);
     }
 
     /// Note to future me: this function does not actually decrypt a byte, you want [Self::decrypt_step]!
     fn decrypt_byte(&mut self) -> u8 {
-        let temp = self.keys[2] | 2;
-        ((temp * (temp ^ 1)) >> 8) as u8
+        let temp: u32 = (self.keys[2] & 0xFFFF) | 2;
+        (temp.wrapping_mul(temp ^ 1) >> 8) as u8
     }
 
     fn decrypt_step(&mut self, byte: u8) -> u8 {
@@ -89,7 +89,7 @@ pub struct ZipCryptoDecryptor {
 impl ZipCryptoDecryptor {
     /// Constructs a new [ZipCryptoDecryptor] from a password, a ZIP encryption header
     /// and a file checksum. The file checksum is required to verify password correctness.
-    pub fn new(password: &[u8], header: [u8; 12], checksum: u32) -> Result<Self, DecryptionError> {
+    pub fn new(password: &[u8], header: [u8; 12], checksum: u32) -> Result<Self, DecryptorCreationError> {
         let mut decryptor = Self {
             state: ZipCryptoState::from_password(password),
             buffer: Vec::new()
@@ -100,12 +100,9 @@ impl ZipCryptoDecryptor {
             dec_header[i] = decryptor.state.decrypt_step(header[i]);
         }
 
-        let checksum_word = (checksum >> 16) as u16;
         let checksum_byte = (checksum >> 24) as u8;
-
-        if dec_header[11] != checksum_byte
-        || u16::from_le_bytes([dec_header[10], dec_header[11]]) != checksum_word {
-            return Err(DecryptionError::IncorrectPassword);
+        if dec_header[11] != checksum_byte {
+            return Err(DecryptorCreationError::IncorrectPassword);
         }
 
         Ok(decryptor)

@@ -1,10 +1,10 @@
 use thiserror::Error;
 
-use crate::decompress::{Decompressor, DecompressionError};
+use crate::{decrypt::DecryptorCreationError, pipeline::{Pipeline, PipelineError}};
 
 use self::structures::{local_file_header::{LocalFileHeader, LFH_SIGNATURE, LFH_CONSTANT_SIZE}, DecompressorCreationError, central_directory::{CentralDirectoryFileHeader, SortedCentralDirectory}};
 
-/// Provides utilities for wokring with ZIP structures 
+/// Provides utilities for wokring with ZIP structures
 pub mod structures;
 
 /// Provides utilities for automatically locating and reading a central directory
@@ -12,11 +12,17 @@ pub mod read_cd;
 
 #[derive(Debug, Error)]
 pub enum DecoderError {
-    #[error("failed to decompress: {0}")]
-    Decompression(#[from] DecompressionError),
+    #[error("file pipeline failed: {0}")]
+    Pipeline(#[from] PipelineError),
 
     #[error("could not create decompressor: {0}")]
     DecompressorInit(#[from] DecompressorCreationError),
+
+    #[error("could not create decryptor: {0}")]
+    DecryptorInit(#[from] DecryptorCreationError),
+
+    #[error("no password provided for encrypted file")]
+    NoPassword,
 
     #[error("data exceeded archive size")]
     ExtraData,
@@ -37,7 +43,7 @@ pub enum DecoderError {
 #[derive(Debug)]
 enum ZipDecoderState {
     FileHeader,
-    FileData(u64, LocalFileHeader, Option<Box<dyn Decompressor>>)
+    FileData(u64, LocalFileHeader, Pipeline)
 }
 
 /// Represents a position in a (possbly multipart) ZIP archive
@@ -74,7 +80,7 @@ pub enum ZipDecodedData<'a> {
     /// The ZIP file headers for a file
     FileHeader(&'a CentralDirectoryFileHeader, &'a LocalFileHeader),
 
-    /// Decoded (uncompressed or decompressed) file bytes 
+    /// Decoded (uncompressed or decompressed) file bytes
     FileData(&'a [u8])
 }
 
@@ -86,6 +92,8 @@ pub struct ZipUnpacker<'a> {
 
     disk_sizes: Vec<usize>,
     central_directory: SortedCentralDirectory,
+
+    password: Option<Vec<u8>>,
 
     #[allow(clippy::type_complexity)]
     on_decode: Option<Box<dyn Fn(ZipDecodedData) -> anyhow::Result<()> + 'a>>
@@ -104,7 +112,7 @@ impl std::fmt::Debug for ZipUnpacker<'_> {
 
 impl<'a> ZipUnpacker<'a> {
     /// Creates a new ZipUnpacker
-    /// 
+    ///
     /// The easiest way to obtain a central directory object is to use [read_cd::from_provider].
     /// "disk_sizes" must only contain one element if the archive is a cut one, and not a
     /// real split one.
@@ -117,14 +125,25 @@ impl<'a> ZipUnpacker<'a> {
             disk_sizes,
             central_directory,
 
+            password: None,
+
             on_decode: None
+        }
+    }
+
+    /// Creates a new ZipUnpacker capable of decrypting files with a specified password.
+    /// See [ZipUnpacker::new] for more information.
+    pub fn new_with_password(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>, password: Vec<u8>) -> Self {
+        Self {
+            password: Some(password),
+            ..Self::new(central_directory, disk_sizes)
         }
     }
 
     /// Creates a new ZipUnpacker, starting from the specified position. If the archive
     /// is not actually split, you must set disk number to 0 and use the absolute offset,
     /// even if there are multiple files
-    /// 
+    ///
     /// The easiest way to obtain a central directory object is to use [read_cd::from_provider].
     /// "disk_sizes" must only contain one element if the archive is a cut one, and not a
     /// real split one.
@@ -141,7 +160,18 @@ impl<'a> ZipUnpacker<'a> {
             disk_sizes,
             central_directory,
 
+            password: None,
+
             on_decode: None
+        })
+    }
+
+    /// Creates a new ZipUnpacker capable of decrypting files with the specified password, starting at
+    /// the specified position. See [ZipUnpacker::resume] for more information.
+    pub fn resume_with_password(central_directory: SortedCentralDirectory, disk_sizes: Vec<usize>, password: Vec<u8>, position: ZipPosition) -> Result<Self, DecoderError> {
+        Ok(Self {
+            password: Some(password),
+            ..(Self::resume(central_directory, disk_sizes, position)?)
         })
     }
 
@@ -154,7 +184,7 @@ impl<'a> ZipUnpacker<'a> {
     /// Update this ZipUnpacker with new bytes. The callback may or
     /// may not be fired, depending on the content. The callback may
     /// be fired multiple times.
-    /// 
+    ///
     /// The first return value is how much the caller should advance the input buffer
     /// (0 means that there wasn't enough data in the buffer and the caller should 
     /// provide more), and the second value determines whether all files were processed 
@@ -236,13 +266,22 @@ impl<'a> ZipUnpacker<'a> {
                     (on_decode)(ZipDecodedData::FileHeader(cdfh, &lfh))?;
                 }
 
+                let decryptor = if lfh.is_encrypted() {
+                    if let Some(password) = &self.password {
+                        Some(lfh.create_decryptor(password)?)
+                    } else {
+                        return Err(DecoderError::NoPassword);
+                    }
+                } else { None };
+
                 if lfh.uncompressed_size != 0 {
                     let decompressor = lfh.compression_method
                         .as_ref()
                         .map(|m| m.create_decompressor())
                         .transpose()?;
 
-                    self.decoder_state = ZipDecoderState::FileData(0, lfh, decompressor);
+                    let pipeline = Pipeline::new(decryptor, decompressor);
+                    self.decoder_state = ZipDecoderState::FileData(0, lfh, pipeline);
                 } else {
                     self.decoder_state = ZipDecoderState::FileHeader;
                     self.current_index += 1;
@@ -251,20 +290,16 @@ impl<'a> ZipUnpacker<'a> {
                 Ok((4 + header_size, false))
             },
 
-            ZipDecoderState::FileData(pos, lfh, decompressor) => {
+            ZipDecoderState::FileData(pos, lfh, pipeline) => {
                 let bytes_left = lfh.compressed_size - *pos;
                 let bytes_to_read = std::cmp::min(bytes_left as usize, data.len());
                 let file_bytes = &data[..bytes_to_read];
 
-                let (count, decompressed) = if let Some(decompressor) = decompressor {
-                    decompressor.update(file_bytes)?
-                } else {
-                    (bytes_to_read, file_bytes)
-                };
+                let (count, data) = pipeline.update(file_bytes)?;
                 *pos += count as u64;
 
                 if let Some(on_decode) = &self.on_decode {
-                    (on_decode)(ZipDecodedData::FileData(decompressed))?;
+                    (on_decode)(ZipDecodedData::FileData(data))?;
                 }
 
                 if count as u64 == bytes_left {

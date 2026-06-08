@@ -2,13 +2,18 @@ use std::io::Cursor;
 
 use byteorder::{ReadBytesExt, LittleEndian};
 
+use crate::{decrypt::{Decryptor, DecryptorCreationError}, zip::structures::file_header::{ENCRYPTED_FLAG, STRONG_ENCRYPTION_FLAG}};
+
 use super::{CompressionMethod, file_header::{FileHeaderExtraField, Zip64ProcessedData, Zip64OriginalData}};
+
+#[cfg(feature = "zipcrypto")]
+use crate::decrypt::zipcrypto::ZipCryptoDecryptor;
 
 pub const LFH_SIGNATURE: u32 = 0x04034b50;
 pub const LFH_CONSTANT_SIZE: usize = 26;
 
 /// Represents the result of reading a ZIP local file header (LFH)
-/// 
+///
 /// The layout of this object does not follow the original ZIP LFH structure
 #[derive(Debug, Clone)]
 pub struct LocalFileHeader {
@@ -27,8 +32,10 @@ pub struct LocalFileHeader {
     pub uncompressed_size: u64,
 
     pub filename: String,
-    
+
     pub extra_fields: Vec<FileHeaderExtraField>,
+
+    pub zipcrypto_header: Option<[u8; 12]>,
 
     pub header_size: usize
 }
@@ -72,7 +79,7 @@ impl LocalFileHeader {
         let Some(extra_fields) = FileHeaderExtraField::read_extra_fields(&data[extra_fields_start..extra_fields_end]) else {
             return None;
         };
-        
+
         let original_zip64_data = Zip64OriginalData {
             uncompressed_size,
             compressed_size,
@@ -87,6 +94,18 @@ impl LocalFileHeader {
             return None;
         };
 
+        let (zipcrypto_header, header_size) = if flag & ENCRYPTED_FLAG != 0 && flag & STRONG_ENCRYPTION_FLAG == 0 {
+            let zipcrypto_header_start = extra_fields_end;
+            let zipcrypto_header_end = zipcrypto_header_start + 12;
+            if zipcrypto_header_end > data.len() {
+                return None;
+            }
+
+            (Some(data[zipcrypto_header_start..zipcrypto_header_end].try_into().unwrap()), zipcrypto_header_end)
+        } else { (None, extra_fields_end) };
+
+        let compressed_size = if zipcrypto_header.is_some() { compressed_size - 12 } else { compressed_size };
+
         Some(Self {
             version,
             flag,
@@ -99,11 +118,36 @@ impl LocalFileHeader {
             filename,
             extra_fields,
 
-            header_size: extra_fields_end
+            #[cfg(feature = "zipcrypto")]
+            zipcrypto_header,
+
+            header_size
         })
     }
 
     pub fn is_directory(&self) -> bool {
         self.filename.ends_with('/')
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        return self.flag & ENCRYPTED_FLAG != 0;
+    }
+
+    /// Create a [Decryptor] for the file described by this LFH with the given password. Returns
+    /// an error if the file is not encrypted.
+    pub fn create_decryptor(&self, password: &[u8]) -> Result<Box<dyn Decryptor>, DecryptorCreationError> {
+        if !self.is_encrypted() {
+            return Err(DecryptorCreationError::NotEncrypted);
+        }
+
+        // ZipCrypto
+        #[cfg(feature = "zipcrypto")]
+        if let Some(zipcrypto_header) = self.zipcrypto_header {
+            return Ok(Box::new(
+                ZipCryptoDecryptor::new(password, zipcrypto_header, self.crc32)?
+            ));
+        }
+
+        Err(DecryptorCreationError::Generic("unsupported encryption method".to_string()))
     }
 }

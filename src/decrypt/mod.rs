@@ -7,10 +7,19 @@ pub mod zipcrypto;
 #[derive(Error, Debug)]
 pub enum DecryptionError {
     #[error("generic decryption error: {0}")]
+    Generic(String)
+}
+
+#[derive(Error, Debug)]
+pub enum DecryptorCreationError {
+    #[error("generic decryptor creation error: {0}")]
     Generic(String),
 
     #[error("incorrect password")]
-    IncorrectPassword
+    IncorrectPassword,
+
+    #[error("data is not encrypted")]
+    NotEncrypted
 }
 
 pub trait Decryptor: std::fmt::Debug + Send + Sync {

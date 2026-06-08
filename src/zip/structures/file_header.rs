@@ -2,6 +2,9 @@ use std::io::Cursor;
 
 use byteorder::{ReadBytesExt, LittleEndian};
 
+pub const ENCRYPTED_FLAG:         u16 = 0x0001;
+pub const STRONG_ENCRYPTION_FLAG: u16 = 0x0040;
+
 /// Contains raw ZIP file header extra field data
 #[derive(Debug, Clone)]
 pub struct FileHeaderExtraField {
