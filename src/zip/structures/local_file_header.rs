@@ -118,7 +118,6 @@ impl LocalFileHeader {
             filename,
             extra_fields,
 
-            #[cfg(feature = "zipcrypto")]
             zipcrypto_header,
 
             header_size

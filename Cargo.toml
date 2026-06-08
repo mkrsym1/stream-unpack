@@ -16,7 +16,7 @@ byteorder = "1.5"
 inflate = { version = "0.4", optional = true }
 
 [features]
-default = [ "zip", "deflate", "zipcrypto" ]
+default = [ "zip", "deflate" ]
 
 # ZIP
 zip = []
