@@ -15,6 +15,9 @@ pub enum DecryptorCreationError {
     #[error("generic decryptor creation error: {0}")]
     Generic(String),
 
+    #[error("missing feature flag for encryption method: {0}")]
+    NoFeature(String),
+
     #[error("incorrect password")]
     IncorrectPassword,
 
