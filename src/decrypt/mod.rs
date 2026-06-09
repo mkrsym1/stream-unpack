@@ -4,6 +4,10 @@ use thiserror::Error;
 #[cfg(feature = "zipcrypto")]
 pub mod zipcrypto;
 
+/// Provides a [Decryptor] for the AE-x algorithm, used in ZIP files.
+#[cfg(feature = "ae-x")]
+pub mod aex;
+
 #[derive(Error, Debug)]
 pub enum DecryptionError {
     #[error("generic decryption error: {0}")]

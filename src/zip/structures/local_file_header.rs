@@ -9,6 +9,9 @@ use super::{CompressionMethod, file_header::{FileHeaderExtraField, Zip64Processe
 #[cfg(feature = "zipcrypto")]
 use crate::decrypt::zipcrypto::ZipCryptoDecryptor;
 
+#[cfg(feature = "ae-x")]
+use crate::decrypt::aex::*;
+
 pub const LFH_SIGNATURE: u32 = 0x04034b50;
 pub const LFH_CONSTANT_SIZE: usize = 26;
 
@@ -115,9 +118,9 @@ impl LocalFileHeader {
 
                 let salt = &data[salt_start..salt_end];
                 let aex_variant = match strength {
-                    0x01 => AExVariant::AES128(salt.try_into().unwrap()),
-                    0x02 => AExVariant::AES192(salt.try_into().unwrap()),
-                    0x03 => AExVariant::AES256(salt.try_into().unwrap()),
+                    0x01 => AExVariableData::AES128(salt.try_into().unwrap()),
+                    0x02 => AExVariableData::AES192(salt.try_into().unwrap()),
+                    0x03 => AExVariableData::AES256(salt.try_into().unwrap()),
                     _ => { return None; }
                 };
 
@@ -129,10 +132,11 @@ impl LocalFileHeader {
 
                 let pvv = u16::from_le_bytes([data[pvv_start], data[pvv_start + 1]]);
 
+                // FIXME this subtracts auth at the end of encrypted data
                 compressed_size -= (salt_length + 2 + 10) as u64;
                 compression_method = u16::from_le_bytes([aex_ef.data[5], aex_ef.data[6]]);
-                header_size = salt_end;
-                encryption = EncryptionData::AEx(aex_variant, pvv)
+                header_size = pvv_end;
+                encryption = EncryptionData::AEx(AExInitData { variable: aex_variant, pvv })
             } else {
                 let zipcrypto_header_start = header_size;
                 let zipcrypto_header_end = zipcrypto_header_start + 12;
@@ -191,7 +195,16 @@ impl LocalFileHeader {
                 }
             }
 
-            EncryptionData::AEx(salt, pvv) => todo!("AEx, {:?}, {}", salt, pvv)
+            EncryptionData::AEx(data) => {
+                #[cfg(feature = "ae-x")] {
+                    data.create_decryptor(password)
+                }
+                #[cfg(not(feature = "ae-x"))] {
+                    let _ = password;
+                    let _ = data;
+                    Err(DecryptorCreationError::NoFeature("ae-x".to_string()))
+                }
+            }
         }
     }
 }
@@ -200,12 +213,29 @@ impl LocalFileHeader {
 pub enum EncryptionData {
     None,
     ZipCrypto([u8; 12]),
-    AEx(AExVariant, u16)
+    AEx(AExInitData)
 }
 
 #[derive(Debug, Clone)]
-pub enum AExVariant {
+pub enum AExVariableData {
     AES128([u8; 8]),
     AES192([u8; 12]),
     AES256([u8; 16])
+}
+
+#[derive(Debug, Clone)]
+pub struct AExInitData {
+    pub variable: AExVariableData,
+    pub pvv: u16
+}
+
+impl AExInitData {
+    #[cfg(feature = "ae-x")]
+    fn create_decryptor(&self, password: &[u8]) -> Result<Box<dyn Decryptor>, DecryptorCreationError> {
+        match &self.variable {
+            AExVariableData::AES128(salt) => Ok(Box::new(AEx128Decryptor::new(password, salt, self.pvv)?)),
+            AExVariableData::AES192(salt) => Ok(Box::new(AEx192Decryptor::new(password, salt, self.pvv)?)),
+            AExVariableData::AES256(salt) => Ok(Box::new(AEx256Decryptor::new(password, salt, self.pvv)?))
+        }
+    }
 }
