@@ -51,14 +51,17 @@ impl Pipeline {
             self.decrypt_buffer.extend(dcr_data);
 
             self.result_buffer.clear();
+            let decrypt_slice = self.decrypt_buffer.as_slice();
+            let mut offset = 0;
             loop {
-                let (dcm_count, dcm_data) = decompressor.update(&self.decrypt_buffer)?;
+                let (dcm_count, dcm_data) = decompressor.update(&decrypt_slice[offset..])?;
                 self.result_buffer.extend(dcm_data);
                 if dcm_count == 0 {
                     break;
                 }
-                self.decrypt_buffer.drain(0..dcm_count);
+                offset += dcm_count;
             }
+            self.decrypt_buffer.drain(0..offset);
 
             Ok((dcr_count, &self.result_buffer))
         } else if let Some(decryptor) = self.decryptor.as_deref_mut() {
